@@ -1,0 +1,435 @@
+Monitoring Stack (Prometheus + Grafana + Blackbox + Node Exporter + cAdvisor + Loki + Promtail) using Docker Compose
+
+Overview:
+
+This project creates a full monitoring + logging stack on an EC2 Ubuntu server using Docker Compose.
+What you will get"
+
+1.Prometheus: collects metrics (monitoring data)
+2.Grafana: dashboards and visualization
+3.Blackbox Exporter: monitors website uptime (HTTP/HTTPS) and DNS (optional)
+4.Node Exporter: server metrics (CPU/RAM/Disk/Network)
+5.cAdvisor: Docker container metrics (CPU/RAM/Network per container)
+6.Loki: log database (stores logs)
+7.Promtail: log shipper (reads logs from server/docker and pushes to Loki)
+
+
+Folder Structure:
+-----------------------------
+/home/ubuntu/monitor
+├── docker-compose.yml
+├── README.md
+├── core/
+│   ├── prometheus/
+│   │   └── prometheus.yml
+│   └── blackbox/
+│       └── blackbox.yml
+└── telemetry/
+    ├── loki/
+    │   └── local-config.yaml
+    └── promtail-config.yaml
+------------------------------
+
+Exporters / Components Explained:
+
+1) Prometheus (Metrics Collector)
+ 
+    ->Scrapes metrics from targets on a schedule.
+    ->Stores metrics in time-series database.
+
+2) Grafana (Visualization)
+
+    ->Reads metrics from Prometheus.
+    ->Reads logs from Loki.
+    ->Builds dashboards, alerts.
+
+3) Node Exporter (Server Metrics, Gives server-level metrics):
+
+    ->CPU usage
+    ->RAM usage
+    ->Disk usage
+    ->Load average
+    ->Network I/O
+    ->Filesystem stats
+
+4) cAdvisor (Container Metrics, Gives Docker/container-level metrics)
+
+    ->CPU per container
+    ->Memory per container
+    ->Network per container
+    ->Filesystem per container
+Note: cAdvisor is for metrics, not logs.
+
+5) Blackbox Exporter (Uptime / Endpoint Monitoring)
+
+    ->Website HTTP/HTTPS status (200 OK)
+    ->SSL/TLS availability
+    ->DNS query success (optional)
+    ->Response time
+
+6) Loki (Log Storage)
+
+    ->Stores logs like a database.
+
+7) Promtail (Log Shipper)
+
+Reads logs from:
+    ->/var/log/syslog, /var/log/auth.log
+    ->Nginx logs: /var/log/nginx/*.log
+    ->Docker container logs: /var/lib/docker/containers/*/*.log
+      Then pushes to Loki.
+
+-------------------------
+Installation & Run Steps:
+-------------------------
+1.Install Docker + Compose (Ubuntu):
+
+sudo apt update -y
+sudo apt install -y docker.io docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker ubuntu
+newgrp docker
+
+Check:
+
+docker --version
+docker compose version
+
+
+2.Create folders & files:
+
+Mkdir  -p /home/ubuntu/monitor/{core/prometheus,core/blackbox,telemetry/loki}
+cd /home/ubuntu/monitor
+
+3.Access UIs
+
+    ->Grafana: http://<EC2-IP>:3000
+    ->Prometheus: http://<EC2-IP>:9090
+    ->cAdvisor: http://<EC2-IP>:8080 
+    ->Loki: http://<EC2-IP>:3100 
+Default Grafana login:
+    ->user: admin
+    ->pass: admin (then it will ask you to change)
+
+--------------------------------
+Verification Checklist (Must Do)
+--------------------------------
+
+1) Prometheus Targets:
+
+Open:
+ http://<EC2-IP>:9090/targets
+
+All should be UP:
+    ->prometheus
+    ->node_exporter
+    ->cadvisor
+    ->blackbox-http
+    ->(optional) blackbox-dns
+
+2) Test from inside Prometheus container:
+
+docker exec -it prometheus wget -qO- http://cadvisor:8080/metrics | head -n 3
+docker exec -it prometheus wget -qO- http://node_exporter:9100/metrics | head -n 3
+docker exec -it prometheus wget -qO- http://blackbox:9115/metrics | head -n 3
+
+3) Logs pipeline:
+Check promtail logs;
+
+docker logs --tail=50 promtail
+
+Grafana Datasources Setup:
+Add Prometheus datasource;
+
+    ->Grafana → Connections → Data sources → Prometheus
+
+ URL:
+    
+    ->If Grafana and Prometheus are in same compose: http://prometheus:9090
+Save & Test.
+
+Add Loki datasource;
+
+    ->Grafana → Data sources → Loki
+
+ URL:
+
+    ->http://loki:3100
+
+Files and Correct Configurations:
+
+1) docker-compose.yml (Main Stack);
+
+This is a correct working compose file (adjust volume paths only if your folders differ):
+
+nano /home/ubuntu/monitor/docker-compose.yml
+
+version: "3.8"
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./core/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - core_prometheus_data:/prometheus
+    networks:
+      - monitor_net
+
+  grafana:
+    image: grafana/grafana:10.4.5
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - core_grafana_data:/var/lib/grafana
+    networks:
+      - monitor_net
+    depends_on:
+      - prometheus
+      - loki
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blackbox
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./core/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    networks:
+      - monitor_net
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./telemetry/loki/local-config.yaml:/etc/loki/local-config.yaml:ro
+      - telemetry_loki_data:/loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    networks:
+      - monitor_net
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: promtail
+    volumes:
+      - ./telemetry/promtail-config.yaml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: ["-config.file=/etc/promtail/config.yml"]
+    networks:
+      - monitor_net
+    depends_on:
+      - loki
+
+  node_exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: node_exporter
+    ports:
+      - "9100:9100"
+    command:
+      - "--path.rootfs=/rootfs"
+    volumes:
+      - /:/rootfs:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    networks:
+      - monitor_net
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks:
+      - monitor_net
+volumes:
+  core_prometheus_data:
+  core_grafana_data:
+  telemetry_loki_data:
+
+networks:
+  monitor_net:
+    driver: bridge
+
+2) core/prometheus/prometheus.yml (Scrape Targets);
+
+Important: Always use service names, not EC2 public IP.
+ This prevents breakage when you change to Elastic IP.
+
+nano /home/ubuntu/monitor/core/prometheus/prometheus.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://rehobothmarine.ae
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  - job_name: node_exporter
+    static_configs:
+      - targets: ["node_exporter:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+3) core/blackbox/blackbox.yml (Blackbox Modules);
+
+Basic HTTP module + optional DNS module:
+
+nano /home/ubuntu/monitor/core/blackbox/blackbox.yml
+
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: "ip4"
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+
+4)telemetry/loki/local-config.yaml (Loki);
+Your Loki config is fine:
+
+nano /home/ubuntu/monitor/telemetry/loki/local-config.yaml
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  allow_structured_metadata: true
+
+5)Promtail-config.yaml (Promtail):
+
+Important fix: use loki:3100, NOT localhost:3100
+ Because inside container localhost means itself.
+
+nano /home/ubuntu/monitor/telemetry/promtail-config.yaml
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: syslog
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: syslog
+          host: ec2
+          __path__: /var/log/syslog
+
+  - job_name: auth
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: auth
+          host: ec2
+          __path__: /var/log/auth.log
+
+  - job_name: nginx
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: nginx
+          host: ec2
+          __path__: /var/log/nginx/*.log
+
+  - job_name: docker
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: docker
+          host: ec2
+          __path__: /var/lib/docker/containers/*/*.log
+
+6.Start the stack
+
+cd /home/ubuntu/monitor
+docker compose up -d
+docker ps
+
+
+If “Permission denied” for Grafana/Prometheus volumes (Important)
+If Grafana log shows:
+
+    ->GF_PATHS_DATA='/var/lib/grafana' is not writable
+
+Fix:
+
+docker compose down
+docker run --rm -v monitor_core_grafana_data:/var/lib/grafana alpine:3.20 sh -c "chown -R 472:472 /var/lib/grafana"
+docker compose up -d
+
+If Prometheus log shows:
+
+    ->open /prometheus/queries.active: permission denied
+
+Fix:
+
+docker compose down
+docker run --rm -v monitor_core_prometheus_data:/prometheus alpine:3.20 sh -c "chown -R 65534:65534 /prometheus"
+docker compose up -d
+
