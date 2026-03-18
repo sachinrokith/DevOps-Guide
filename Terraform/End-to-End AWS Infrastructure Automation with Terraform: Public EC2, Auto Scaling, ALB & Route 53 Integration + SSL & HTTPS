@@ -80,6 +80,16 @@ module "security" {
   vpc_id       = module.network.vpc_id
 }
 
+module "route53" {
+  source = "./modules/route53"
+
+  hosted_zone_name = var.hosted_zone_name
+  record_name      = "${var.subdomain_name}.${var.hosted_zone_name}"
+  www_record_name  = "www.${var.subdomain_name}.${var.hosted_zone_name}"
+  alb_dns_name     = module.alb.alb_dns_name
+  alb_zone_id      = module.alb.alb_zone_id
+}
+
 module "alb" {
   source = "./modules/alb"
 
@@ -88,6 +98,7 @@ module "alb" {
   public_subnet_ids = module.network.public_subnet_ids
   alb_sg_id         = module.security.alb_sg_id
   health_check_path = var.health_check_path
+  certificate_arn   = module.route53.certificate_arn
 }
 
 module "ec2" {
@@ -105,17 +116,6 @@ module "ec2" {
   min_size         = var.min_size
   max_size         = var.max_size
 }
-
-module "route53" {
-  source = "./modules/route53"
-
-  hosted_zone_name = var.hosted_zone_name
-  record_name      = "${var.subdomain_name}.${var.hosted_zone_name}"
-  www_record_name  = "www.${var.subdomain_name}.${var.hosted_zone_name}"
-  alb_dns_name     = module.alb.alb_dns_name
-  alb_zone_id      = module.alb.alb_zone_id
-}
-
 ----------------
 2.Providers.tf:
 ----------------
@@ -630,8 +630,6 @@ resource "aws_lb" "this" {
   security_groups    = [var.alb_sg_id]
   subnets            = var.public_subnet_ids
 
-  enable_deletion_protection = false
-
   tags = {
     Name = "${var.project_name}-alb"
   }
@@ -646,14 +644,14 @@ resource "aws_lb_target_group" "this" {
 
   health_check {
     enabled             = true
-    interval            = 30
     path                = var.health_check_path
     port                = "traffic-port"
     protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 30
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 3
-    matcher             = "200"
   }
 
   tags = {
@@ -665,6 +663,24 @@ resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
   port              = 80
   protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.this.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = var.certificate_arn
 
   default_action {
     type             = "forward"
@@ -697,6 +713,9 @@ variable "health_check_path" {
   type = string
 }
 
+variable "certificate_arn" {
+  type = string
+}
 -------------
 3.Outputs.tf:
 -------------
@@ -733,6 +752,38 @@ nano main.tf
 data "aws_route53_zone" "this" {
   name         = var.hosted_zone_name
   private_zone = false
+}
+
+resource "aws_acm_certificate" "cert" {
+  domain_name               = var.record_name
+  validation_method         = "DNS"
+  subject_alternative_names = [var.www_record_name]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cert.domain_validation_options :
+    dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  }
+
+  zone_id = data.aws_route53_zone.this.zone_id
+  name    = each.value.name
+  type    = each.value.type
+  ttl     = 60
+  records = [each.value.record]
+}
+
+resource "aws_acm_certificate_validation" "cert" {
+  certificate_arn         = aws_acm_certificate.cert.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
 resource "aws_route53_record" "test_a_alias" {
@@ -779,7 +830,6 @@ variable "alb_dns_name" {
 variable "alb_zone_id" {
   type = string
 }
-
 -------------
 3.Outputs.tf:
 -------------
@@ -791,6 +841,10 @@ output "test_domain" {
 
 output "www_test_domain" {
   value = aws_route53_record.www_cname.fqdn
+}
+
+output "certificate_arn" {
+  value = aws_acm_certificate_validation.cert.certificate_arn
 }
 
 Inside the security Module:
