@@ -1,0 +1,921 @@
+End-to-End AWS Infrastructure Automation with Terraform: Public EC2, Auto Scaling, ALB & Route 53 Integration:
+
+Workflow:
+-------------------------------
+terraform-route53-private-ec2/
+├── provider.tf
+├── variables.tf
+├── terraform.tfvars
+├── main.tf
+├── outputs.tf
+└── modules/
+    ├── network/
+    │   ├── main.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
+    ├── security/
+    │   ├── main.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
+    ├── ec2/
+    │   ├── main.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
+    ├── alb/
+    │   ├── main.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
+    └── route53/
+        ├── main.tf
+        ├── variables.tf
+        └── outputs.tf
+-------------------------------
+
+Create a Directory: -->
+
+Mkdir terraform-route-private-ec2
+
+Then create file: -->
+
+touch main.tf
+touch providers.tf
+touch variables.tf
+touch terraform.tfvars
+touch outputs.tf
+ 
+
+1.main.tf:
+-------------
+nano main.tf
+------------
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = [var.ami_owner]
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+module "network" {
+  source = "./modules/network"
+
+  project_name         = var.project_name
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_cidrs  = var.public_subnet_cidrs
+  private_subnet_cidrs = var.private_subnet_cidrs
+  availability_zones   = var.availability_zones
+}
+
+module "security" {
+  source = "./modules/security"
+
+  project_name = var.project_name
+  vpc_id       = module.network.vpc_id
+}
+
+module "alb" {
+  source = "./modules/alb"
+
+  project_name      = var.project_name
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+  alb_sg_id         = module.security.alb_sg_id
+  health_check_path = var.health_check_path
+}
+
+module "ec2" {
+  source = "./modules/ec2"
+
+  project_name       = var.project_name
+  ami_id             = data.aws_ami.ubuntu.id
+  instance_type      = var.instance_type
+  key_name           = var.key_name
+  private_subnet_ids = module.network.public_subnet_ids
+  ec2_sg_id          = module.security.ec2_sg_id
+  target_group_arn   = module.alb.target_group_arn
+
+  desired_capacity = var.desired_capacity
+  min_size         = var.min_size
+  max_size         = var.max_size
+}
+
+module "route53" {
+  source = "./modules/route53"
+
+  hosted_zone_name = var.hosted_zone_name
+  record_name      = "${var.subdomain_name}.${var.hosted_zone_name}"
+  www_record_name  = "www.${var.subdomain_name}.${var.hosted_zone_name}"
+  alb_dns_name     = module.alb.alb_dns_name
+  alb_zone_id      = module.alb.alb_zone_id
+}
+
+----------------
+2.Providers.tf:
+----------------
+nano providers.tf
+
+roviders.tf
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+---------------
+3.variables.tf:
+---------------
+nano variables.tf
+
+variable "aws_region" {
+  type    = string
+  default = "ap-south-2"
+}
+
+variable "project_name" {
+  type    = string
+  default = "rehobath-marine"
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidrs" {
+  type = list(string)
+  default = [
+    "10.0.1.0/24",
+    "10.0.2.0/24"
+  ]
+}
+
+variable "private_subnet_cidrs" {
+  type = list(string)
+  default = [
+    "10.0.11.0/24",
+    "10.0.12.0/24"
+  ]
+}
+
+variable "availability_zones" {
+  type = list(string)
+  default = [
+    "ap-south-2a",
+    "ap-south-2b"
+  ]
+}
+
+variable "instance_type" {
+  type    = string
+  default = "t3.micro"
+}
+
+variable "key_name" {
+  type    = string
+  default = "rehobath-marine-key"
+}
+
+variable "hosted_zone_name" {
+  type    = string
+  default = "dovin.xyz"
+}
+
+variable "subdomain_name" {
+  type    = string
+  default = "test"
+}
+
+variable "ami_owner" {
+  type    = string
+  default = "099720109477"
+}
+
+variable "desired_capacity" {
+  type    = number
+  default = 2
+}
+
+variable "min_size" {
+  type    = number
+  default = 1
+}
+
+variable "max_size" {
+  type    = number
+  default = 3
+}
+
+variable "health_check_path" {
+  type    = string
+  default = "/"
+}
+
+-------------------
+4.terraform.tfvars:
+-------------------
+nano terraform.tf
+
+aws_region   = "ap-south-2"
+project_name = "rehobath-marine"
+vpc_cidr     = "10.0.0.0/16"
+
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
+
+availability_zones = ["ap-south-2a", "ap-south-2b"]
+
+instance_type = "t3.micro"
+key_name      = "rehobath-marine-key"
+
+hosted_zone_name = "dovin.xyz"
+subdomain_name   = "test"
+
+desired_capacity = 2
+min_size         = 1
+max_size         = 3
+
+health_check_path = "/"
+
+-------------
+5.outputs.tf:
+-------------
+nano outputs.tf
+
+
+output "vpc_id" {
+  value = module.network.vpc_id
+}
+
+output "public_subnet_ids" {
+  value = module.network.public_subnet_ids
+}
+
+output "private_subnet_ids" {
+  value = module.network.private_subnet_ids
+}
+
+output "nat_eip" {
+  value = module.network.nat_eip
+}
+
+output "alb_dns_name" {
+  value = module.alb.alb_dns_name
+}
+
+output "test_domain" {
+  value = module.route53.test_domain
+}
+
+output "www_test_domain" {
+  value = module.route53.www_test_domain
+}
+
+output "autoscaling_group_name" {
+  value = module.ec2.asg_name
+}
+
+
+Then Create Modules:
+--------------------
+
+    -->Inside the terraform-route-private-ec2 create two directory.
+
+cd terraform_host_nodesite
+mkdir modules
+
+Inside modules directory;
+-------------------------
+
+mkdir network
+mkdir ec2
+mkdir alb
+mkdir route53
+mkdir security
+
+Inside Network Module:
+----------------------
+touch main.tf
+touch variables.tf
+touch outputs.tf
+
+----------
+1.Main.tf:
+----------
+nano main.tf
+
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.project_name}-igw"
+  }
+}
+
+resource "aws_subnet" "public" {
+  count = length(var.public_subnet_cidrs)
+
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  availability_zone       = var.availability_zones[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-public-${count.index + 1}"
+  }
+}
+
+resource "aws_subnet" "private" {
+  count = length(var.private_subnet_cidrs)
+
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = var.private_subnet_cidrs[count.index]
+  availability_zone = var.availability_zones[count.index]
+
+  tags = {
+    Name = "${var.project_name}-private-${count.index + 1}"
+  }
+}
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "this" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+
+  depends_on = [aws_internet_gateway.this]
+
+  tags = {
+    Name = "${var.project_name}-nat"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count = length(aws_subnet.private)
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+
+---------------
+2.Variables.tf:
+---------------
+nano variables.tf
+
+variable "project_name" {
+  type = string
+}
+
+variable "vpc_cidr" {
+  type = string
+}
+
+variable "public_subnet_cidrs" {
+  type = list(string)
+}
+
+variable "private_subnet_cidrs" {
+  type = list(string)
+}
+
+variable "availability_zones" {
+  type = list(string)
+}
+
+------------
+3.Outputs.tf
+------------
+nano outputs.tf
+
+output "vpc_id" {
+  value = aws_vpc.this.id
+}
+
+output "public_subnet_ids" {
+  value = aws_subnet.public[*].id
+}
+
+output "private_subnet_ids" {
+  value = aws_subnet.private[*].id
+}
+
+output "nat_eip" {
+  value = aws_eip.nat.public_ip
+}
+
+
+Inside the ec2 Module:
+----------------------
+touch main.tf
+touch variables.tf
+touch outputs.tf
+
+----------
+1.Main.tf:
+----------
+nano main.tf
+
+locals {
+  user_data = <<-EOF
+              #!/bin/bash
+              set -eux
+
+              apt-get update -y
+              apt-get install -y nginx
+
+              cat > /var/www/html/index.html <<HTML
+              <html>
+                <head>
+                  <title>Rehobath Marine Test Nginx</title>
+                </head>
+                <body style="font-family: Arial; text-align:center; padding-top:50px;">
+                  <h1>Nginx deployed successfully from Auto Scaling EC2</h1>
+                  <h2>Project: Rehobath Marine</h2>
+                  <p>Hostname: $(hostname)</p>
+                </body>
+              </html>
+              HTML
+
+              systemctl enable nginx
+              systemctl restart nginx
+              EOF
+}
+
+resource "aws_launch_template" "this" {
+  name_prefix   = "${var.project_name}-lt-"
+  image_id      = var.ami_id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+
+  # changed: assign public IP
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [var.ec2_sg_id]
+  }
+
+  user_data = base64encode(local.user_data)
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "${var.project_name}-public-ec2"
+    }
+  }
+
+  tags = {
+    Name = "${var.project_name}-launch-template"
+  }
+}
+
+resource "aws_autoscaling_group" "this" {
+  name                      = "${var.project_name}-asg"
+  min_size                  = var.min_size
+  max_size                  = var.max_size
+  desired_capacity          = var.desired_capacity
+  vpc_zone_identifier       = var.private_subnet_ids
+  health_check_type         = "ELB"
+  health_check_grace_period = 120
+  target_group_arns         = [var.target_group_arn]
+
+  launch_template {
+    id      = aws_launch_template.this.id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "${var.project_name}-asg-ec2"
+    propagate_at_launch = true
+  }
+}
+
+--------------
+2.Variables.tf
+--------------
+nano variables.tf
+
+variable "project_name" {
+  type = string
+}
+
+variable "ami_id" {
+  type = string
+}
+
+variable "instance_type" {
+  type = string
+}
+
+variable "key_name" {
+  type = string
+}
+
+variable "private_subnet_ids" {
+  type = list(string)
+}
+
+variable "ec2_sg_id" {
+  type = string
+}
+
+variable "target_group_arn" {
+  type = string
+}
+
+variable "desired_capacity" {
+  type = number
+}
+
+variable "min_size" {
+  type = number
+}
+
+variable "max_size" {
+  type = number
+}
+
+-------------
+3.Outputs.tf:
+-------------
+nano outputs.tf
+
+output "launch_template_id" {
+  value = aws_launch_template.this.id
+}
+
+output "asg_name" {
+  value = aws_autoscaling_group.this.name
+}
+
+Inside the alb Module:
+
+touch main.tf
+touch variables.tf
+touch outputs.tf
+
+----------
+1.Main.tf:
+----------
+nano main.tf
+
+resource "aws_lb" "this" {
+  name               = "${var.project_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [var.alb_sg_id]
+  subnets            = var.public_subnet_ids
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "${var.project_name}-alb"
+  }
+}
+
+resource "aws_lb_target_group" "this" {
+  name        = "${var.project_name}-tg"
+  port        = 80
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = var.vpc_id
+
+  health_check {
+    enabled             = true
+    interval            = 30
+    path                = var.health_check_path
+    port                = "traffic-port"
+    protocol            = "HTTP"
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    matcher             = "200"
+  }
+
+  tags = {
+    Name = "${var.project_name}-tg"
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.this.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.this.arn
+  }
+}
+
+--------------
+2.Variables.tf
+--------------
+nano variables.tf
+
+variable "project_name" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "public_subnet_ids" {
+  type = list(string)
+}
+
+variable "alb_sg_id" {
+  type = string
+}
+
+variable "health_check_path" {
+  type = string
+}
+
+-------------
+3.Outputs.tf:
+-------------
+nano outputs.tf
+
+output "alb_arn" {
+  value = aws_lb.this.arn
+}
+
+output "alb_dns_name" {
+  value = aws_lb.this.dns_name
+}
+
+output "alb_zone_id" {
+  value = aws_lb.this.zone_id
+}
+
+output "target_group_arn" {
+  value = aws_lb_target_group.this.arn
+}
+
+
+Inside the route53 Module:
+--------------------------
+touch main.tf
+touch variables.tf
+touch outputs.tf
+
+----------
+1.Main.tf:
+----------
+nano main.tf
+
+data "aws_route53_zone" "this" {
+  name         = var.hosted_zone_name
+  private_zone = false
+}
+
+resource "aws_route53_record" "test_a_alias" {
+  zone_id = data.aws_route53_zone.this.zone_id
+  name    = var.record_name
+  type    = "A"
+
+  alias {
+    name                   = var.alb_dns_name
+    zone_id                = var.alb_zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "www_cname" {
+  zone_id = data.aws_route53_zone.this.zone_id
+  name    = var.www_record_name
+  type    = "CNAME"
+  ttl     = 300
+  records = [var.record_name]
+}
+
+--------------
+2.Variables.tf
+--------------
+nano variables.tf
+
+variable "hosted_zone_name" {
+  type = string
+}
+
+variable "record_name" {
+  type = string
+}
+
+variable "www_record_name" {
+  type = string
+}
+
+variable "alb_dns_name" {
+  type = string
+}
+
+variable "alb_zone_id" {
+  type = string
+}
+
+-------------
+3.Outputs.tf:
+-------------
+nano outputs.tf
+
+output "test_domain" {
+  value = aws_route53_record.test_a_alias.fqdn
+}
+
+output "www_test_domain" {
+  value = aws_route53_record.www_cname.fqdn
+}
+
+Inside the security Module:
+
+touch main.tf
+touch variables.tf
+touch outputs.tf
+
+----------
+1.Main.tf:
+----------
+nano main.tf
+
+resource "aws_security_group" "alb" {
+  name        = "${var.project_name}-alb-sg"
+  description = "ALB security group"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "HTTP from internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS from internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-alb-sg"
+  }
+}
+
+resource "aws_security_group" "ec2" {
+  name        = "${var.project_name}-ec2-sg"
+  description = "EC2 security group"
+  vpc_id      = var.vpc_id
+
+  # Allow HTTP directly from internet (for testing via public IP)
+  ingress {
+    description = "HTTP from internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow HTTP from ALB (important for load balancer flow)
+  ingress {
+    description     = "HTTP from ALB"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  # Allow SSH access
+  ingress {
+    description = "SSH access"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-ec2-sg"
+  }
+}
+
+--------------
+2.Variables.tf
+--------------
+nano variables.tf
+
+variable "project_name" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+-------------
+3.Outputs.tf:
+-------------
+nano outputs.tf
+
+output "alb_sg_id" {
+  value = aws_security_group.alb.id
+}
+
+output "ec2_sg_id" {
+  value = aws_security_group.ec2.id
+}
+
+-------------
+RUN Commands:
+-------------
+terraform init
+terraform fmt
+terraform validate
+terraform plan
+terraform apply
+
+( terraform apply -auto-approve )
