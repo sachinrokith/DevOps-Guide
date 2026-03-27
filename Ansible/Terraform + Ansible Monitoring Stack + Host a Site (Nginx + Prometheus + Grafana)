@@ -1,0 +1,1558 @@
+Terraform + Ansible Monitoring Stack + Host a Site (Nginx + Prometheus + Grafana) :
+-----------------------------------------------------------------------------------
+
+Project Overview:
+-----------------
+
+This project demonstrates a real-time DevOps infrastructure using:
+
+    -->Terraform → Infrastructure provisioning (AWS)
+    --?Ansible → Configuration management
+    -->Nginx → Web server
+    -->Prometheus → Metrics collection
+    -->Grafana → Visualization dashboards
+    -->Node Exporter + Nginx Exporter + Blackbox Exporter→ Monitoring data
+
+ Architecture:
+--------------
+
+2 EC2 Instances:
+
+    -->Web Server
+    -->Nginx
+    -->Node Exporter
+    -->Nginx Exporter
+    -->Domain: tech.dovin.xyz
+
+Monitoring Server:
+
+    -->Prometheus
+    -->Grafana
+    -->Dashboards
+
+Project Structure:
+
+terraform-monitoring-nginx/
+├── provider.tf
+├── variables.tf
+├── terraform.tfvars
+├── main.tf
+├── outputs.tf
+├── inventory.tpl
+├── modules/
+│   ├── network/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── security/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── ec2/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── route53/
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+└── ansible/
+    ├── ansible.cfg
+    ├── inventory.ini
+    ├── playbook.yml
+    ├── group_vars/
+    │   └── all.yml
+    └── roles/
+        ├── nginx/
+        │   ├── tasks/main.yml
+        │   ├── templates/nginx.conf.j2
+        │   └── handlers/main.yml
+        ├── exporters/
+        │   └── tasks/main.yml
+        ├── prometheus/
+        │   ├── tasks/main.yml
+        │   └── templates/prometheus.yml.j2
+        └── grafana/
+            ├── tasks/main.yml
+            └── handlers/main.yml
+
+
+Step1: Create a Directory:
+--------------------------
+ 
+    mkdir terraform-monitoring-nginx
+
+1.1: Inside the terraform-monitoring-nginx create 2 Directory and files;
+
+    mkdir ansible
+    mkdir modules
+
+Step 2: Terraform Files
+
+    cd terraform-monitoring-nginx
+
+2.1:Create Files;
+
+    touch variables.tf
+    touch main.tf
+    touch providers.tf 
+    touch terraform.tfvars
+    touch outputs.tf
+    touch inventory.tp1
+
+Provider.tf:
+-----------
+
+    Nano providers.tf
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+
+Variables.tf:
+
+    Nano variables.tf
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+}
+
+variable "project_name" {
+  description = "Project name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Environment"
+  type        = string
+  default     = "dev"
+}
+
+variable "vpc_cidr" {
+  description = "VPC CIDR"
+  type        = string
+}
+
+variable "public_subnet_1_cidr" {
+  description = "Public subnet 1 CIDR"
+  type        = string
+}
+
+variable "public_subnet_2_cidr" {
+  description = "Public subnet 2 CIDR"
+  type        = string
+}
+
+variable "availability_zone_1" {
+  description = "Availability zone 1"
+  type        = string
+}
+
+variable "availability_zone_2" {
+  description = "Availability zone 2"
+  type        = string
+}
+
+variable "instance_type_web" {
+  description = "EC2 type for web server"
+  type        = string
+}
+
+variable "instance_type_monitoring" {
+  description = "EC2 type for monitoring server"
+  type        = string
+}
+
+variable "key_name" {
+  description = "AWS key pair name"
+  type        = string
+}
+
+variable "public_key_path" {
+  description = "Path to local public key"
+  type        = string
+}
+
+variable "private_key_path" {
+  description = "Path to local private key"
+  type        = string
+}
+
+variable "my_ip_cidr" {
+  description = "Your public IP in CIDR format for SSH and dashboards. Use 0.0.0.0/0 only for testing."
+  type        = string
+}
+
+variable "domain_name" {
+  description = "Root domain name"
+  type        = string
+}
+
+variable "subdomain" {
+  description = "Subdomain name only, for example tech"
+  type        = string
+}
+
+terraform.tfvars:
+
+    nano terraform.tfvars
+
+aws_region   = "ap-south-2"
+project_name = "terraform-monitoring-nginx"
+environment  = "dev"
+
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_1_cidr = "10.0.1.0/24"
+public_subnet_2_cidr = "10.0.2.0/24"
+
+availability_zone_1 = "ap-south-2a"
+availability_zone_2 = "ap-south-2b"
+
+instance_type_web        = "t3.micro"
+instance_type_monitoring = "t3.small"
+
+key_name         = "tech-monitoring-key"
+public_key_path  = "/home/reamsechnologies/.ssh/tech-monitoring-key.pub"
+private_key_path = "/home/reamsechnologies/.ssh/tech-monitoring-key"
+
+my_ip_cidr = "0.0.0.0/0"
+
+domain_name = "dovin.xyz"
+subdomain   = "tech"
+
+repo_url    = "https://github.com/sachinrokith/Rehobath-Marine-Deploy.git"
+repo_branch = "main"
+app_name    = "rehobath-marine"
+
+main.tf:
+
+    nano main.tf
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"]
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+resource "aws_key_pair" "deployer" {
+  key_name   = var.key_name
+  public_key = file(var.public_key_path)
+
+  tags = {
+    Name = var.key_name
+  }
+}
+
+module "network" {
+  source = "./modules/network"
+
+  project_name         = var.project_name
+  environment          = var.environment
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_1_cidr = var.public_subnet_1_cidr
+  public_subnet_2_cidr = var.public_subnet_2_cidr
+  availability_zone_1  = var.availability_zone_1
+  availability_zone_2  = var.availability_zone_2
+}
+
+module "security" {
+  source = "./modules/security"
+
+  project_name   = var.project_name
+  environment    = var.environment
+  vpc_id         = module.network.vpc_id
+  my_ip_cidr     = var.my_ip_cidr
+  vpc_cidr_block = var.vpc_cidr
+}
+
+module "ec2" {
+  source = "./modules/ec2"
+
+  project_name             = var.project_name
+  environment              = var.environment
+  ami_id                   = data.aws_ami.ubuntu.id
+  key_name                 = aws_key_pair.deployer.key_name
+  instance_type_web        = var.instance_type_web
+  instance_type_monitoring = var.instance_type_monitoring
+  subnet_id_web            = module.network.public_subnet_1_id
+  subnet_id_monitoring     = module.network.public_subnet_2_id
+  web_sg_id                = module.security.web_sg_id
+  monitoring_sg_id         = module.security.monitoring_sg_id
+}
+
+module "route53" {
+  source = "./modules/route53"
+
+  domain_name   = var.domain_name
+  fqdn          = "${var.subdomain}.${var.domain_name}"
+  web_public_ip = module.ec2.web_public_ip
+}
+
+resource "local_file" "ansible_inventory" {
+  filename = "${path.module}/ansible/inventory.ini"
+
+  content = templatefile("${path.module}/inventory.tpl", {
+    web_public_ip         = module.ec2.web_public_ip
+    monitoring_public_ip  = module.ec2.monitoring_public_ip
+    web_private_ip        = module.ec2.web_private_ip
+    monitoring_private_ip = module.ec2.monitoring_private_ip
+    fqdn                  = "${var.subdomain}.${var.domain_name}"
+    repo_url              = var.repo_url
+    repo_branch           = var.repo_branch
+    app_name              = var.app_name
+  })
+}
+
+resource "local_file" "ansible_cfg" {
+  filename = "${path.module}/ansible/ansible.cfg"
+  content  = <<-EOT
+[defaults]
+inventory = inventory.ini
+host_key_checking = False
+remote_user = ubuntu
+private_key_file = ${var.private_key_path}
+retry_files_enabled = False
+timeout = 30
+interpreter_python = auto_silent
+EOT
+}
+
+outputs.tf:
+
+      nano outputs.tf
+
+output "web_public_ip" {
+  value = module.ec2.web_public_ip
+}
+
+output "web_private_ip" {
+  value = module.ec2.web_private_ip
+}
+
+output "monitoring_public_ip" {
+  value = module.ec2.monitoring_public_ip
+}
+
+output "monitoring_private_ip" {
+  value = module.ec2.monitoring_private_ip
+}
+
+output "subdomain_fqdn" {
+  value = "${var.subdomain}.${var.domain_name}"
+}
+
+output "grafana_url" {
+  value = "http://${module.ec2.monitoring_public_ip}:3000"
+}
+
+output "prometheus_url" {
+  value = "http://${module.ec2.monitoring_public_ip}:9090"
+}
+
+inventory.tpl:
+
+    Nano inventory.tp1
+
+[web]
+web1 ansible_host=${web_public_ip} private_ip=${web_private_ip} domain_name=${fqdn}
+
+[monitoring]
+monitor1 ansible_host=${monitoring_public_ip} private_ip=${monitoring_private_ip}
+
+[all:vars]
+ansible_user=ubuntu
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+web_private_ip=${web_private_ip}
+monitoring_private_ip=${monitoring_private_ip}
+domain_name=${fqdn}
+
+repo_url=${repo_url}
+repo_branch=${repo_branch}
+app_name=${app_name}
+
+
+Terraform Modules:
+
+Inside the module,  create Directorys
+
+    mkdir network
+    mkdir security
+    mkdir ec2
+    mkdir alb
+    mkdir monitoring
+    mkdir route53 
+
+Network Module:
+
+Create file:
+
+    mkdir variables.tf
+    mkdir main.tf
+    mkdir variables.tf
+
+Variables.tf:
+
+    nano variables.tf
+
+variable "project_name" {
+  type = string
+}
+
+variable "environment" {
+  type = string
+}
+
+variable "vpc_cidr" {
+  type = string
+}
+
+variable "public_subnet_1_cidr" {
+  type = string
+}
+
+variable "public_subnet_2_cidr" {
+  type = string
+}
+
+variable "availability_zone_1" {
+  type = string
+}
+
+variable "availability_zone_2" {
+  type = string
+}
+
+main.tf:
+
+    nano main.tf 
+
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-igw"
+  }
+}
+
+resource "aws_subnet" "public_1" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.public_subnet_1_cidr
+  availability_zone       = var.availability_zone_1
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-public-subnet-1"
+  }
+}
+
+resource "aws_subnet" "public_2" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.public_subnet_2_cidr
+  availability_zone       = var.availability_zone_2
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-public-subnet-2"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public_1" {
+  subnet_id      = aws_subnet.public_1.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "public_2" {
+  subnet_id      = aws_subnet.public_2.id
+  route_table_id = aws_route_table.public.id
+}
+
+outputs.tf:
+
+    Nano outputs.tf
+
+output "vpc_id" {
+  value = aws_vpc.this.id
+}
+
+output "public_subnet_1_id" {
+  value = aws_subnet.public_1.id
+}
+
+output "public_subnet_2_id" {
+  value = aws_subnet.public_2.id
+}
+
+Security Module:
+
+Create file:
+
+    mkdir variables.tf
+    mkdir main.tf
+    mkdir variables.tf
+
+variables.tf:
+
+    nano variables.tf
+
+variable "project_name" {
+  type = string
+}
+
+variable "environment" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "my_ip_cidr" {
+  type = string
+}
+
+variable "vpc_cidr_block" {
+  type = string
+}
+
+main.tf:
+
+    nano main.tf 
+
+resource "aws_security_group" "web" {
+  name        = "${var.project_name}-${var.environment}-web-sg"
+  description = "Security group for web server"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "SSH from my IP"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr]
+  }
+
+  ingress {
+    description = "HTTP from internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS from internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "Node exporter from VPC"
+    from_port   = 9100
+    to_port     = 9100
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
+
+  ingress {
+    description = "Nginx exporter from VPC"
+    from_port   = 9113
+    to_port     = 9113
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-web-sg"
+  }
+}
+
+resource "aws_security_group" "monitoring" {
+  name        = "${var.project_name}-${var.environment}-monitoring-sg"
+  description = "Security group for monitoring server"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "SSH from my IP"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr]
+  }
+
+  ingress {
+    description = "Grafana from my IP"
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr]
+  }
+
+  ingress {
+    description = "Prometheus from my IP"
+    from_port   = 9090
+    to_port     = 9090
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr]
+  }
+
+  ingress {
+    description = "Node exporter from VPC"
+    from_port   = 9100
+    to_port     = 9100
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-monitoring-sg"
+  }
+}
+
+
+outputs.tf:
+
+    nano outputs.tf 
+
+output "web_sg_id" {
+  value = aws_security_group.web.id
+}
+
+output "monitoring_sg_id" {
+  value = aws_security_group.monitoring.id
+}
+
+Ec2 modules:
+
+Create file:
+
+    mkdir variables.tf
+    mkdir main.tf
+    mkdir variables.tf
+
+variables.tf:
+
+    nano variables.tf 
+
+variable "project_name" {
+  type = string
+}
+
+variable "environment" {
+  type = string
+}
+
+variable "ami_id" {
+  type = string
+}
+
+variable "key_name" {
+  type = string
+}
+
+variable "instance_type_web" {
+  type = string
+}
+
+variable "instance_type_monitoring" {
+  type = string
+}
+
+variable "subnet_id_web" {
+  type = string
+}
+
+variable "subnet_id_monitoring" {
+  type = string
+}
+
+variable "web_sg_id" {
+  type = string
+}
+
+variable "monitoring_sg_id" {
+  type = string
+}
+
+main.tf:
+
+    nano main.tf
+
+resource "aws_instance" "web" {
+  ami                         = var.ami_id
+  instance_type               = var.instance_type_web
+  subnet_id                   = var.subnet_id_web
+
+  vpc_security_group_ids      = [var.web_sg_id]
+
+  key_name                    = var.key_name
+  associate_public_ip_address = true
+
+  depends_on = [var.web_sg_id]
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-web"
+  }
+}
+
+resource "aws_instance" "monitoring" {
+  ami                         = var.ami_id
+  instance_type               = var.instance_type_monitoring
+  subnet_id                   = var.subnet_id_monitoring
+
+  # IMPORTANT FIX
+  vpc_security_group_ids      = [var.monitoring_sg_id]
+
+  key_name                    = var.key_name
+  associate_public_ip_address = true
+
+  # FORCE dependency (very important)
+  depends_on = [var.monitoring_sg_id]
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-monitoring"
+  }
+}
+
+outputs.tf:
+
+    nano outputs.tf
+
+output "web_public_ip" {
+  value = aws_instance.web.public_ip
+}
+
+output "web_private_ip" {
+  value = aws_instance.web.private_ip
+}
+
+output "monitoring_public_ip" {
+  value = aws_instance.monitoring.public_ip
+}
+
+output "monitoring_private_ip" {
+  value = aws_instance.monitoring.private_ip
+}
+
+route53 modules:
+
+Create file:
+
+    mkdir variables.tf
+    mkdir main.tf
+    mkdir variables.tf
+
+variables.tf:
+
+    nano variables.tf 
+
+variable "domain_name" {
+  type = string
+}
+
+variable "fqdn" {
+  type = string
+}
+
+variable "web_public_ip" {
+  type = string
+}
+
+main.tf:
+
+    nano main.tf 
+
+data "aws_route53_zone" "this" {
+  name         = var.domain_name
+  private_zone = false
+}
+
+resource "aws_route53_record" "subdomain" {
+  zone_id = data.aws_route53_zone.this.zone_id
+  name    = var.fqdn
+  type    = "A"
+  ttl     = 300
+  records = [var.web_public_ip]
+}
+
+outputs.tf:
+
+    nano outputs.tf 
+
+output "record_fqdn" {
+ value = aws_route53_record.subdomain.fqdn
+}
+
+
+Step 3: Ansible Files:
+
+      ansible/ansible.cfg
+
+[defaults]
+inventory = inventory.ini
+host_key_checking = False
+remote_user = ubuntu
+private_key_file = /home/reamsechnologies/.ssh/tech-monitoring-key
+retry_files_enabled = False
+timeout = 30
+interpreter_python = auto_silent
+
+
+ansible/playbook.yml:
+
+    nano playbook.yml
+
+---
+- name: Configure web server
+  hosts: web
+  become: yes
+  roles:
+    - nginx
+    - app_deploy
+    - exporters
+
+- name: Configure monitoring server
+  hosts: monitoring
+  become: yes
+  roles:
+    - prometheus
+    - blackbox
+    - grafana
+    - exporters
+
+
+Inside the ansible:
+
+Create a Directory:
+
+    mkdir group_vars
+
+Inside the group_vars;
+
+Create a File:
+
+    touch all.yml
+
+all.yml:
+
+nano all.yml
+
+domain_name: "tech.dovin.xyz"
+
+grafana_admin_user: "admin"
+grafana_admin_password: "Admin@123"
+
+prometheus_version: "2.52.0"
+node_exporter_version: "1.8.1"
+nginx_exporter_version: "1.1.0"
+blackbox_exporter_version: "0.25.0"
+
+nodejs_major_version: "20"
+
+app_root: "/opt/app"
+app_name: "rehobath-marine"
+app_port: 5000
+
+mongo_uri: "mongodb://127.0.0.1:27017/rehobath_marine"
+
+
+Nginx Role:
+
+ansible/roles/nginx/tasks/
+
+main.yml:
+
+    Nano main.yml
+
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install nginx and certbot
+  apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+      - curl
+    state: present
+
+- name: Enable nginx
+  systemd:
+    name: nginx
+    enabled: yes
+    state: started
+
+- name: Deploy nginx config
+  template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/sites-available/tech.dovin.xyz.conf
+    mode: '0644'
+  notify: Reload nginx
+
+- name: Enable nginx site
+  file:
+    src: /etc/nginx/sites-available/tech.dovin.xyz.conf
+    dest: /etc/nginx/sites-enabled/tech.dovin.xyz.conf
+    state: link
+  notify: Reload nginx
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Ensure web root exists
+  file:
+    path: /var/www/tech.dovin.xyz/html
+    state: directory
+    recurse: yes
+
+- name: Create sample index page
+  copy:
+    dest: /var/www/tech.dovin.xyz/html/index.html
+    content: |
+      <html>
+      <head><title>tech.dovin.xyz</title></head>
+      <body>
+        <h1>tech.dovin.xyz is running</h1>
+        <p>Nginx deployed by Ansible</p>
+      </body>
+      </html>
+    mode: '0644'
+
+- name: Test nginx config
+  command: nginx -t
+  register: nginx_test
+  changed_when: false
+
+- name: Reload nginx after config test
+  systemd:
+    name: nginx
+    state: reloaded
+
+# Run this only after DNS has pointed correctly
+- name: Obtain Let's Encrypt certificate
+  command: >
+    certbot --nginx -d {{ domain_name }}
+    --non-interactive
+    --agree-tos
+    -m admin@{{ domain_name | regex_replace('^.*?\\.', '') }}
+    --redirect
+  register: certbot_result
+  failed_when: false
+  changed_when: "'Congratulations' in certbot_result.stdout or 'Certificate not yet due for renewal' in certbot_result.stdout"
+
+
+ansible/roles/nginx/templates/nginx.conf.j2:
+
+    nano nginx.conf.j2
+
+server {
+    listen 80;
+    server_name {{ domain_name }};
+
+    root /var/www/tech.dovin.xyz/html;
+    index index.html;
+
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:{{ app_port }}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /stub_status {
+        stub_status;
+        allow 127.0.0.1;
+        allow {{ monitoring_private_ip }};
+        deny all;
+    }
+}
+
+
+ansible/roles/nginx/handlers/main.yml:
+
+nano main.yml
+
+---
+- name: Reload nginx
+ systemd:
+   name: nginx
+   state: reloaded
+
+Exporters Role:
+
+ansible/roles/exporters/tasks/main.yml:
+
+    nano main.yml
+
+---
+- name: Install required packages
+  apt:
+    name:
+      - wget
+      - curl
+      - tar
+    state: present
+    update_cache: yes
+
+# ==========================
+# NODE EXPORTER
+# ==========================
+- name: Create node_exporter user
+  user:
+    name: node_exporter
+    shell: /usr/sbin/nologin
+    system: yes
+    create_home: no
+
+- name: Download node_exporter
+  get_url:
+    url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+    dest: /tmp/node_exporter.tar.gz
+
+- name: Extract node_exporter
+  unarchive:
+    src: /tmp/node_exporter.tar.gz
+    dest: /tmp/
+    remote_src: yes
+
+- name: Copy node_exporter binary
+  copy:
+    src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+    dest: /usr/local/bin/node_exporter
+    remote_src: yes
+    mode: '0755'
+
+- name: Create node_exporter service
+  copy:
+    dest: /etc/systemd/system/node_exporter.service
+    content: |
+      [Unit]
+      Description=Node Exporter
+      After=network.target
+
+      [Service]
+      User=node_exporter
+      Group=node_exporter
+      ExecStart=/usr/local/bin/node_exporter
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Enable node_exporter
+  systemd:
+    name: node_exporter
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# ==========================
+# NGINX EXPORTER (WEB ONLY)
+# ==========================
+- name: Install nginx exporter only on web
+  when: "'web' in group_names"
+  block:
+
+    - name: Download nginx exporter
+      get_url:
+        url: "https://github.com/nginxinc/nginx-prometheus-exporter/releases/download/v{{ nginx_exporter_version }}/nginx-prometheus-exporter_{{ nginx_exporter_version }}_linux_amd64.tar.gz"
+        dest: /tmp/nginx_exporter.tar.gz
+
+    - name: Extract nginx exporter
+      unarchive:
+        src: /tmp/nginx_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Move nginx exporter binary
+      shell: |
+        cp /tmp/nginx-prometheus-exporter /usr/local/bin/nginx-prometheus-exporter
+        chmod +x /usr/local/bin/nginx-prometheus-exporter
+
+    - name: Create nginx exporter service
+      copy:
+        dest: /etc/systemd/system/nginx_exporter.service
+        content: |
+          [Unit]
+          Description=Nginx Prometheus Exporter
+          After=network.target nginx.service
+
+          [Service]
+          ExecStart=/usr/local/bin/nginx-prometheus-exporter -nginx.scrape-uri http://127.0.0.1/stub_status
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable nginx exporter
+      systemd:
+        name: nginx_exporter
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+
+Prometheus Role:
+
+ansible/roles/prometheus/tasks/main.yml:
+
+    nano main.yml
+
+---
+- name: Create prometheus user
+  user:
+    name: prometheus
+    shell: /usr/sbin/nologin
+    system: yes
+    create_home: no
+
+- name: Create prometheus directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: '0755'
+  loop:
+    - /etc/prometheus
+    - /var/lib/prometheus
+
+- name: Download prometheus
+  get_url:
+    url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+    dest: /tmp/prometheus.tar.gz
+    mode: '0644'
+
+- name: Extract prometheus
+  unarchive:
+    src: /tmp/prometheus.tar.gz
+    dest: /tmp/
+    remote_src: yes
+
+- name: Copy prometheus binary
+  copy:
+    src: "/tmp/prometheus-{{ prometheus_version }}.linux-amd64/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    remote_src: yes
+    mode: '0755'
+  loop:
+    - prometheus
+    - promtool
+
+- name: Copy consoles directory
+  copy:
+    src: "/tmp/prometheus-{{ prometheus_version }}.linux-amd64/consoles"
+    dest: /etc/prometheus/
+    remote_src: yes
+    owner: prometheus
+    group: prometheus
+    mode: '0755'
+
+- name: Copy console_libraries directory
+  copy:
+    src: "/tmp/prometheus-{{ prometheus_version }}.linux-amd64/console_libraries"
+    dest: /etc/prometheus/
+    remote_src: yes
+    owner: prometheus
+    group: prometheus
+    mode: '0755'
+
+- name: Deploy prometheus config
+  template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: prometheus
+    group: prometheus
+    mode: '0644'
+
+- name: Create prometheus service
+  copy:
+    dest: /etc/systemd/system/prometheus.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      User=prometheus
+      Group=prometheus
+      Type=simple
+      ExecStart=/usr/local/bin/prometheus \
+        --config.file=/etc/prometheus/prometheus.yml \
+        --storage.tsdb.path=/var/lib/prometheus \
+        --web.console.templates=/etc/prometheus/consoles \
+        --web.console.libraries=/etc/prometheus/console_libraries
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start prometheus
+  systemd:
+    name: prometheus
+    enabled: yes
+    state: started
+
+
+ansible/roles/prometheus/templates/prometheus.yml.j2:
+
+nano prometheus.yml.j2:
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "monitoring-node"
+    static_configs:
+      - targets: ["{{ monitoring_private_ip }}:9100"]
+
+  - job_name: "web-node"
+    static_configs:
+      - targets: ["{{ web_private_ip }}:9100"]
+
+  - job_name: "web-nginx"
+    static_configs:
+      - targets: ["{{ web_private_ip }}:9113"]
+
+  - job_name: "blackbox-http"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - "https://{{ domain_name }}"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: "127.0.0.1:9115"
+
+  - job_name: "blackbox-ssl"
+    metrics_path: /probe
+    params:
+      module: [ssl_cert]
+    static_configs:
+      - targets:
+          - "{{ domain_name }}:443"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: "127.0.0.1:9115
+
+
+Grafana Role:
+
+ansible/roles/grafana/tasks/main.yml:
+
+    nano main.yml
+
+---
+- name: Install dependencies
+  apt:
+    name:
+      - apt-transport-https
+      - software-properties-common
+      - wget
+      - gnupg
+      - curl
+    state: present
+    update_cache: yes
+
+- name: Add Grafana GPG key
+  shell: |
+    wget -q -O - https://packages.grafana.com/gpg.key | gpg --dearmor -o /usr/share/keyrings/grafana.gpg
+  args:
+    creates: /usr/share/keyrings/grafana.gpg
+    executable: /bin/bash
+
+- name: Add Grafana repository
+  copy:
+    dest: /etc/apt/sources.list.d/grafana.list
+    content: |
+      deb [signed-by=/usr/share/keyrings/grafana.gpg] https://packages.grafana.com/oss/deb stable main
+    mode: "0644"
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install Grafana
+  apt:
+    name: grafana
+    state: present
+
+- name: Create Grafana provisioning directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/grafana/provisioning/datasources
+    - /etc/grafana/provisioning/dashboards
+    - /var/lib/grafana/dashboards
+
+- name: Configure Prometheus datasource
+  copy:
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    mode: "0644"
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          access: proxy
+          url: http://localhost:9090
+          isDefault: true
+          editable: true
+  notify: Restart grafana
+
+- name: Configure dashboard provider
+  copy:
+    dest: /etc/grafana/provisioning/dashboards/default.yml
+    mode: "0644"
+    content: |
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 10
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards
+  notify: Restart grafana
+
+- name: Download Node Exporter dashboard
+  get_url:
+    url: https://grafana.com/api/dashboards/1860/revisions/latest/download
+    dest: /var/lib/grafana/dashboards/node_exporter_full.json
+    mode: "0644"
+  notify: Restart grafana
+
+- name: Download Nginx dashboard
+  get_url:
+    url: https://grafana.com/api/dashboards/12708/revisions/latest/download
+    dest: /var/lib/grafana/dashboards/nginx_dashboard.json
+    mode: "0644"
+  notify: Restart grafana
+
+- name: Create website + SSL dashboard
+  copy:
+    dest: /var/lib/grafana/dashboards/website_ssl_dashboard.json
+    mode: "0644"
+    content: |
+      {
+        "annotations": { "list": [] },
+        "editable": true,
+        "graphTooltip": 0,
+        "panels": [
+          {
+            "type": "stat",
+            "title": "Website Up",
+            "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "targets": [
+              {
+                "expr": "probe_success{job=\"blackbox-http\",instance=\"https://{{ domain_name }}\"}",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Probe Duration",
+            "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "targets": [
+              {
+                "expr": "probe_duration_seconds{job=\"blackbox-http\",instance=\"https://{{ domain_name }}\"}",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "type": "stat",
+            "title": "SSL Days Remaining",
+            "gridPos": { "h": 6, "w": 6, "x": 0, "y": 6 },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "targets": [
+              {
+                "expr": "(probe_ssl_earliest_cert_expiry{job=\"blackbox-ssl\",instance=\"{{ domain_name }}:443\"} - time()) / 86400",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "HTTP Status Code",
+            "gridPos": { "h": 8, "w": 12, "x": 6, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "targets": [
+              {
+                "expr": "probe_http_status_code{job=\"blackbox-http\",instance=\"https://{{ domain_name }}\"}",
+                "refId": "A"
+              }
+            ]
+          }
+        ],
+        "schemaVersion": 38,
+        "style": "dark",
+        "tags": ["website", "ssl", "blackbox"],
+        "templating": { "list": [] },
+        "time": { "from": "now-6h", "to": "now" },
+        "title": "Website + SSL Monitoring",
+        "version": 1
+      }
+  notify: Restart grafana
+
+- name: Set dashboard ownership
+  file:
+    path: /var/lib/grafana/dashboards
+    owner: grafana
+    group: grafana
+    recurse: yes
+
+- name: Ensure grafana.ini has admin user
+  lineinfile:
+    path: /etc/grafana/grafana.ini
+    regexp: '^;?admin_user ='
+    line: "admin_user = {{ grafana_admin_user }}"
+  notify: Restart grafana
+
+- name: Ensure grafana.ini has admin password
+  lineinfile:
+    path: /etc/grafana/grafana.ini
+    regexp: '^;?admin_password ='
+    line: "admin_password = {{ grafana_admin_password }}"
+  notify: Restart grafana
+
+- name: Enable and start Grafana
+  systemd:
+    name: grafana-server
+    enabled: yes
+    state: started
+
+
+ansible/roles/grafana/handlers/main.yml:
+
+nano main.yml:
+
+---
+- name: Restart grafana
+ systemd:
+   name: grafana-server
+   state: restarted
+
+Deployment Commands For Terraform:
+
+    terraform init
+    terraform fmt -recursive
+    terraform validate
+    terraform plan
+    terraform apply 
+
+Deployment Commands For Ansible
+
+*note run these commands after running the terraform & Run this commands inside the ansible directory
+
+     ansible-playbook -i inventory.ini playbook.yml --limit web
+     ansible-playbook -i inventory.ini playbook.yml --limit monitoring
