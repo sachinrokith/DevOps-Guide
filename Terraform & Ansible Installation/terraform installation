@@ -1,0 +1,43 @@
+Terraform Installation in wsl:
+-------------------------------
+
+wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+sudo apt update && sudo apt install terraform
+
+Terraform -v
+
+AWSCLI Installiatio:
+---------------------
+
+Sudo apt update
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
+UnZip awscli
+
+Sudo apt install unzip -y
+
+Unzip awscliv2.zip
+
+
+RUN the installer 
+
+sudo ./aws/install
+
+
+Check version
+
+aws --version
+Configure AWS Credentials
+Once AWS CLI works, run:
+aws configure
+
+Then enter:
+------------
+AWS Access Key ID
+AWS Secret Access Key
+Default region name (example: us-east-1)
+Default output format (json)
